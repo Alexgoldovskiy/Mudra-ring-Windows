@@ -1,0 +1,51 @@
+﻿---
+BasedOnStyle: LLVM
+AlignAfterOpenBracket: Align
+AlignConsecutiveMacros: "true"
+AlignConsecutiveAssignments: "true"
+AlignConsecutiveDeclarations: "true"
+AlignEscapedNewlines: Left
+AlignOperands: "true"
+AlignTrailingComments: "true"
+AllowShortBlocksOnASingleLine: "false"
+AllowShortCaseLabelsOnASingleLine: "false"
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: "false"
+BreakBeforeBraces: Custom
+BraceWrapping:
+  AfterClass: true
+  AfterControlStatement: true
+  AfterEnum: false
+  AfterFunction: true
+  AfterNamespace: true
+  AfterObjCDeclaration: false
+  AfterStruct: false
+  AfterUnion: false
+  AfterExternBlock: false
+  BeforeCatch: true
+  BeforeElse: true
+  IndentBraces: false
+  SplitEmptyFunction: true
+  SplitEmptyRecord: false
+  SplitEmptyNamespace: false
+BreakBeforeTernaryOperators: "false"
+ColumnLimit: "185"
+CommentPragmas: "^ IWYU pragma:"
+IncludeBlocks: Regroup
+IndentCaseLabels: "true"
+IndentPPDirectives: BeforeHash
+IndentWidth: "4"
+Language: Cpp
+PointerAlignment: Left
+ReflowComments: "false"
+SpaceAfterCStyleCast: "true"
+SpaceAfterLogicalNot: "false"
+SpaceBeforeAssignmentOperators: "true"
+SpaceBeforeCpp11BracedList: "true"
+SpaceBeforeParens: ControlStatements
+SpaceInEmptyParentheses: "false"
+SpacesInCStyleCastParentheses: "false"
+SpacesInContainerLiterals: "false"
+SpacesInParentheses: "false"
+Standard: Cpp11

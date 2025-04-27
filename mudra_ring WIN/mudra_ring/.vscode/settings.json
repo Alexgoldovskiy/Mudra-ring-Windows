@@ -1,0 +1,23 @@
+{
+    "files.associations": {
+        "driverlib.h": "c",
+        "hw_memmap.h": "c",
+        "evm_hardware.h": "c",
+        "device.h": "c",
+        "pccomm.h": "c",
+        "mudra_band_defs.h": "c",
+        "coines.h": "c",
+        "coines_bridge.h": "c",
+        "mudra_ring_defs.h": "c",
+        "time.h": "c",
+        "_time.h": "c",
+        "sdl.h": "c",
+        "unistd.h": "c",
+        "usbconstructs.h": "c",
+        "usbcdc.h": "c",
+        "usbhid.h": "c",
+        "descriptors.h": "c",
+        "usb.h": "c",
+        "ppg.h": "c"
+    }
+}

@@ -1,0 +1,3 @@
+
+
+clang-format -style="{ColumnLimit: 10}" -i file.c

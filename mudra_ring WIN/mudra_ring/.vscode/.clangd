@@ -1,0 +1,32 @@
+CompileFlags:
+  Add: [
+    '-I.',  # Project root directory
+    '-I./algorithm',
+    '-I./algorithm/navigation',
+    '-I./algorithm/pressure',
+    '-I./ble',
+    '-I./config',
+    '-I./logic',
+    '--target=arm-none-eabi',  # Specify the target for ARM cross-compilation
+
+  ]
+"clangd.arguments": [
+  "--query-driver=C:/Program Files (x86)/Arm GNU Toolchain arm-none-eabi/13.2 Rel1/bin/arm-none-eabi-gcc.exe"
+]
+
+# Optionally, add more configurations
+Diagnostics:
+  ClangTidy:
+    CheckOptions:
+      readability-*.Checks: '-*,readability-braces-around-statements'
+
+
+CompileFlags:
+  Add: [
+    '-DNRF52',
+    '-DNRF52832_XXAA',
+    '-DS132',
+    '-DSOFTDEVICE_PRESENT',
+    # Add other relevant defines here
+  ]
+
