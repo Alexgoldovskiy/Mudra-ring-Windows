@@ -271,13 +271,11 @@ void close_pipe_streaming(void)
 /* Function to stream BMI323 data to pipe */
 void stream_to_pipe(int16_t acc_x, int16_t acc_y, int16_t acc_z, int16_t gyr_x, int16_t gyr_y, int16_t gyr_z)
 {
-    pthread_mutex_lock(&sensor_mutex);
 #ifdef _WIN32
     HANDLE local_pipe = bmi323_pipe_stream;
 #else
     FILE* local_pipe = bmi323_pipe_stream;
 #endif
-    pthread_mutex_unlock(&sensor_mutex);
 
 #ifdef _WIN32
     if (local_pipe != INVALID_HANDLE_VALUE)
@@ -313,13 +311,11 @@ void stream_to_pipe(int16_t acc_x, int16_t acc_y, int16_t acc_z, int16_t gyr_x, 
 /* Function to stream AFE4950 data to pipe */
 void afe4950_stream_to_pipe(float* tia_voltage)
 {
-    pthread_mutex_lock(&sensor_mutex);
 #ifdef _WIN32
     HANDLE local_pipe = afe4950_pipe_stream;
 #else
     FILE* local_pipe = afe4950_pipe_stream;
 #endif
-    pthread_mutex_unlock(&sensor_mutex);
 
 #ifdef _WIN32
     if (local_pipe != INVALID_HANDLE_VALUE)
@@ -2036,6 +2032,24 @@ unsigned __stdcall win_bmi323_thread(void* arg)
 void* bmi323_thread(void* arg)
 #endif
 {
+    // Calculate time between frames for 800Hz (1.25ms per frame)
+    const long target_frame_time_us = 100; // 1.25ms = 800Hz
+#ifdef _WIN32
+    LARGE_INTEGER frequency;
+    LARGE_INTEGER last_display_time;
+    LARGE_INTEGER current_time;
+    double elapsed_us;
+    
+    QueryPerformanceFrequency(&frequency);
+    QueryPerformanceCounter(&last_display_time);
+#else
+    struct timeval last_display_time;
+    struct timeval current_time;
+    long           elapsed_us;
+
+    gettimeofday(&last_display_time, NULL);
+#endif
+
     while (running)
     {
         pthread_mutex_lock(&sensor_mutex);
@@ -2044,12 +2058,33 @@ void* bmi323_thread(void* arg)
 
         if (sensors_active)
         {
-            read_sensor_data();
-            coines_delay_usec(950);
+            // Get current time for frame rate control
+#ifdef _WIN32
+            QueryPerformanceCounter(&current_time);
+            elapsed_us = (current_time.QuadPart - last_display_time.QuadPart) * 1000000.0 / frequency.QuadPart;
+#else
+            gettimeofday(&current_time, NULL);
+            elapsed_us = (current_time.tv_sec - last_display_time.tv_sec) * 1000000 + (current_time.tv_usec - last_display_time.tv_usec);
+#endif
+
+            // Only process data if we've reached our target frame time
+            if (elapsed_us >= target_frame_time_us)
+            {
+                read_sensor_data();
+                
+                // Update the last display time
+#ifdef _WIN32
+                last_display_time = current_time;
+#else
+                last_display_time = current_time;
+#endif
+            }
+            // Sleep for a very short time to avoid hogging CPU
+            usleep(100); // 0.1ms sleep
         }
         else
         {
-            coines_delay_msec(100);
+            usleep(100000); // 100ms when not reading sensors
         }
     }
 
@@ -2075,13 +2110,16 @@ void* afe4950_thread(void* arg)
 
     // Calculate time between frames for 50Hz (20ms per frame)
     const long     target_frame_time_us = 20000; // 20ms = 50Hz
-#ifndef _WIN32
+    #ifdef _WIN32
+    win_timeval last_display_time;
+    win_timeval current_time;
+    #else
     struct timeval last_display_time;
     struct timeval current_time;
+    #endif
     long           elapsed_us;
 
     gettimeofday(&last_display_time, NULL);
-#endif
 
     while (running)
     {
@@ -2099,7 +2137,6 @@ void* afe4950_thread(void* arg)
                 last_data_read_time = time(NULL);
                 timed_out           = false;
 
-#ifndef _WIN32
                 // Check if it's time to update the display (target 50Hz)
                 gettimeofday(&current_time, NULL);
                 elapsed_us = (current_time.tv_sec - last_display_time.tv_sec) * 1000000 + (current_time.tv_usec - last_display_time.tv_usec);
@@ -2109,7 +2146,6 @@ void* afe4950_thread(void* arg)
                 {
                     last_display_time = current_time;
                 }
-#endif
 
                 // Keep polling rapidly for data to avoid missing samples
                 usleep(1000);
@@ -2121,7 +2157,7 @@ void* afe4950_thread(void* arg)
                 {
                     if (!timed_out)
                     {
-                        printf("\r\033[KAFE4950 Capture Timed Out\n");
+                        printf("\rAFE4950 Capture Timed Out\n");
                         timed_out = true;
                         afe4950_stop_capture();
                     }
@@ -2137,9 +2173,9 @@ void* afe4950_thread(void* arg)
     }
 
 #ifdef _WIN32
-    return 0;
+return 0;
 #else
-    return NULL;
+return NULL;
 #endif
 }
 

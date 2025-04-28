@@ -9,18 +9,32 @@ Reads from two named pipes and displays the data in a 6x1 grid layout:
 - 5th: TIA1-8 PPG data
 - 6th: TIA1-10 PPG data
 
-With dynamic y-axis scaling for PPG channels
+With dynamic y-axis scaling for PPG channels - Optimized for better performance
 """
 
 import os
 import time
 import signal
 import threading
+import matplotlib
+# Use TkAgg backend by default as it's usually available
+try:
+    matplotlib.use('TkAgg')
+except Exception:
+    pass
+
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation
 from collections import deque
 import platform
 import sys
+import numpy as np
+
+# Configure matplotlib for better performance
+matplotlib.rcParams['path.simplify'] = True
+matplotlib.rcParams['path.simplify_threshold'] = 1.0
+matplotlib.rcParams['agg.path.chunksize'] = 10000
+matplotlib.rcParams['figure.dpi'] = 90  # Lower DPI for faster rendering
 
 # Configuration
 if platform.system() == 'Windows':
@@ -30,7 +44,7 @@ else:
     BMI323_PIPE_PATH = "/tmp/bmi323_stream"
     AFE4950_PIPE_PATH = "/tmp/afe4950_stream"
 
-WINDOW_SIZE = 18000  # Maximum number of points to store
+WINDOW_SIZE = 10000  # Reduced from 18000 to improve performance while keeping enough data
 DISPLAY_WINDOW = 10.0  # Display window in seconds (fixed to 10 seconds)
 UPDATE_INTERVAL = 20  # Update interval in ms
 DATA_TIMEOUT = 2.0  # Seconds without new data before reset
@@ -43,6 +57,9 @@ GYRO_Y_MAX = 250.0
 
 # Margin percentage for PPG plots (adds this percentage of the range above/below min/max)
 PPG_MARGIN_PERCENT = 0.15
+
+# How often to update PPG y-axis limits (every N frames)
+PPG_YLIM_UPDATE_INTERVAL = 5
 
 # Initialize tracking variables for PPG min/max values
 tia3_min, tia3_max = float('inf'), float('-inf')
@@ -76,6 +93,7 @@ ppg_lock = threading.Lock()
 # Flag to control the animation
 running = True
 
+# Set up the figure and axes
 fig = plt.figure(figsize=(12, 8))
 fig.suptitle("Mudra Ring Sensor Data", fontsize=12)  # Reduced title size
 
@@ -275,8 +293,7 @@ def check_timestamp_reset(timestamps, new_timestamp, threshold=1000000):
 
 
 def update(frame):
-    _ = frame
-    """Update function for animation"""
+    """Update function for animation - optimized for performance"""
     global running, tia3_min, tia3_max, tia5_min, tia5_max, tia8_min, tia8_max, tia10_min, tia10_max
     global imu_last_update, ppg_last_update
 
@@ -288,154 +305,146 @@ def update(frame):
 
     current_time = time.time()
 
-    # Check for IMU data timeout
-    with imu_lock:
-        # Check if we've received any IMU data
-        if len(imu_timestamps) > 0:
-            # If it's been too long since the last update, reset the data
-            if current_time - imu_last_update > DATA_TIMEOUT:
+    # Only check for timeouts every 30 frames to reduce overhead
+    if frame % 30 == 0:
+        # Check for IMU data timeout
+        with imu_lock:
+            if len(imu_timestamps) > 0 and current_time - imu_last_update > DATA_TIMEOUT:
                 reset_imu_data()
 
-    # Check for PPG data timeout
-    with ppg_lock:
-        # Check if we've received any PPG data
-        if len(ppg_timestamps) > 0:
-            # If it's been too long since the last update, reset the data
-            if current_time - ppg_last_update > DATA_TIMEOUT:
+        # Check for PPG data timeout
+        with ppg_lock:
+            if len(ppg_timestamps) > 0 and current_time - ppg_last_update > DATA_TIMEOUT:
                 reset_ppg_data()
 
-    # Update IMU data
+    # Update IMU data - faster implementation using numpy
     with imu_lock:
         try:
             if len(imu_timestamps) > 0:
-                imu_time_data = [(t - imu_timestamps[0]) / 1_000_000 for t in imu_timestamps]
-
-                # Calculate the relative time (always referenced to the latest timestamp)
-                latest_time = imu_timestamps[-1]
-
-                # Use a fixed window from 0 to DISPLAY_WINDOW seconds
-                imu_window_start = 0
-                imu_window_end = DISPLAY_WINDOW
-
-                # Adjust the data time values to always be within 0-10 second window
-                # by subtracting an offset that keeps the latest point at the appropriate position
-                offset = (latest_time - imu_timestamps[0]) / 1_000_000 - DISPLAY_WINDOW
-                if offset < 0:
-                    offset = 0  # During the initial growing phase
-
-                # Adjust time values to fit the fixed window
-                imu_time_data = [t - offset for t in imu_time_data]
-
-                # Find indices for the windowed data
-                imu_window_indices = [i for i, t in enumerate(imu_time_data) if t >= imu_window_start]
-
-                if imu_window_indices:
-                    imu_windowed_time = [imu_time_data[i] for i in imu_window_indices]
-
-                    # Window the data for each sensor
-                    windowed_acc_x = [acc_x_data[i] for i in imu_window_indices]
-                    windowed_acc_y = [acc_y_data[i] for i in imu_window_indices]
-                    windowed_acc_z = [acc_z_data[i] for i in imu_window_indices]
-                    windowed_gyr_x = [gyr_x_data[i] for i in imu_window_indices]
-                    windowed_gyr_y = [gyr_y_data[i] for i in imu_window_indices]
-                    windowed_gyr_z = [gyr_z_data[i] for i in imu_window_indices]
-
+                # Convert to numpy arrays for faster processing
+                imu_time_array = np.array(imu_timestamps)
+                imu_time_data = (imu_time_array - imu_time_array[0]) / 1_000_000
+                
+                # Calculate the window offset more efficiently
+                latest_time = imu_time_data[-1]
+                offset = max(0, latest_time - DISPLAY_WINDOW)
+                
+                # Apply offset
+                imu_time_data = imu_time_data - offset
+                
+                # Find indices for the windowed data more efficiently
+                mask = imu_time_data >= 0
+                
+                if np.any(mask):
+                    # Apply mask to get windowed data
+                    imu_windowed_time = imu_time_data[mask]
+                    
+                    # Use numpy arrays for better performance
+                    acc_x_array = np.array(acc_x_data)
+                    acc_y_array = np.array(acc_y_data)
+                    acc_z_array = np.array(acc_z_data)
+                    gyr_x_array = np.array(gyr_x_data)
+                    gyr_y_array = np.array(gyr_y_data)
+                    gyr_z_array = np.array(gyr_z_data)
+                    
                     # Update accelerometer lines
-                    acc_x_line.set_data(imu_windowed_time, windowed_acc_x)
-                    acc_y_line.set_data(imu_windowed_time, windowed_acc_y)
-                    acc_z_line.set_data(imu_windowed_time, windowed_acc_z)
-
+                    acc_x_line.set_data(imu_windowed_time, acc_x_array[mask])
+                    acc_y_line.set_data(imu_windowed_time, acc_y_array[mask])
+                    acc_z_line.set_data(imu_windowed_time, acc_z_array[mask])
+                    
                     # Update gyroscope lines
-                    gyr_x_line.set_data(imu_windowed_time, windowed_gyr_x)
-                    gyr_y_line.set_data(imu_windowed_time, windowed_gyr_y)
-                    gyr_z_line.set_data(imu_windowed_time, windowed_gyr_z)
-
+                    gyr_x_line.set_data(imu_windowed_time, gyr_x_array[mask])
+                    gyr_y_line.set_data(imu_windowed_time, gyr_y_array[mask])
+                    gyr_z_line.set_data(imu_windowed_time, gyr_z_array[mask])
+                    
                 # Keep the fixed y-axis limits
                 ax_acc.set_ylim(ACC_Y_MIN, ACC_Y_MAX)
                 ax_gyr.set_ylim(GYRO_Y_MIN, GYRO_Y_MAX)
-
+                
         except Exception as e:
-            print(f"Error updating IMU plot: {e}")
+            # Only print occasional errors to reduce console spam
+            if frame % 100 == 0:
+                print(f"Error updating IMU plot: {e}")
 
-    # Update PPG data
+    # Update PPG data - also optimized using numpy
     with ppg_lock:
         try:
             if len(ppg_timestamps) > 0:
-                ppg_time_data = [(t - ppg_timestamps[0]) / 9_700_0 for t in ppg_timestamps]
-
-                # Calculate the relative time (always referenced to the latest timestamp)
-                latest_time = ppg_timestamps[-1]
-
-                # Use a fixed window from 0 to DISPLAY_WINDOW seconds
-                ppg_window_start = 0
-                ppg_window_end = DISPLAY_WINDOW
-
-                # Adjust the data time values to always be within 0-10 second window
-                # by subtracting an offset that keeps the latest point at the appropriate position
-                offset = (latest_time - ppg_timestamps[0]) / 9_700_0 - DISPLAY_WINDOW
-                if offset < 0:
-                    offset = 0  # During the initial growing phase
-
-                # Adjust time values to fit the fixed window
-                ppg_time_data = [t - offset for t in ppg_time_data]
-
-                # Find indices for the windowed data
-                ppg_window_indices = [i for i, t in enumerate(ppg_time_data) if t >= ppg_window_start]
-
-                if ppg_window_indices:
-                    ppg_windowed_time = [ppg_time_data[i] for i in ppg_window_indices]
-
-                    # Window the data for each channel
-                    windowed_tia3 = [tia1_3_data[i] for i in ppg_window_indices]
-                    windowed_tia5 = [tia1_5_data[i] for i in ppg_window_indices]
-                    windowed_tia8 = [tia1_8_data[i] for i in ppg_window_indices]
-                    windowed_tia10 = [tia1_10_data[i] for i in ppg_window_indices]
-
+                # Convert to numpy arrays for faster processing
+                ppg_time_array = np.array(ppg_timestamps)
+                ppg_time_data = (ppg_time_array - ppg_time_array[0]) / 9_700_0
+                
+                # Calculate the window offset more efficiently
+                latest_time = ppg_time_data[-1]
+                offset = max(0, latest_time - DISPLAY_WINDOW)
+                
+                # Apply offset
+                ppg_time_data = ppg_time_data - offset
+                
+                # Find indices for the windowed data more efficiently
+                mask = ppg_time_data >= 0
+                
+                if np.any(mask):
+                    # Apply mask to get windowed data
+                    ppg_windowed_time = ppg_time_data[mask]
+                    
+                    # Use numpy arrays for better performance
+                    tia3_array = np.array(tia1_3_data)
+                    tia5_array = np.array(tia1_5_data)
+                    tia8_array = np.array(tia1_8_data)
+                    tia10_array = np.array(tia1_10_data)
+                    
                     # Update channel lines
-                    tia3_line.set_data(ppg_windowed_time, windowed_tia3)
-                    tia5_line.set_data(ppg_windowed_time, windowed_tia5)
-                    tia8_line.set_data(ppg_windowed_time, windowed_tia8)
-                    tia10_line.set_data(ppg_windowed_time, windowed_tia10)
-
-                    # Get the min/max values for the CURRENT window and update y-axis limits and ticks
-                    if windowed_tia3:
-                        window_tia3_min = min(windowed_tia3)
-                        window_tia3_max = max(windowed_tia3)
-                        if window_tia3_min != window_tia3_max:  # Avoid flat lines causing issues
-                            y_min, y_max = calculate_axis_limits(window_tia3_min, window_tia3_max, PPG_MARGIN_PERCENT)
-                            ax_tia_1.set_ylim(y_min, y_max)
-
-                    if windowed_tia5:
-                        window_tia5_min = min(windowed_tia5)
-                        window_tia5_max = max(windowed_tia5)
-                        if window_tia5_min != window_tia5_max:
-                            y_min, y_max = calculate_axis_limits(window_tia5_min, window_tia5_max, PPG_MARGIN_PERCENT)
-                            ax_tia_2.set_ylim(y_min, y_max)
-
-                    if windowed_tia8:
-                        window_tia8_min = min(windowed_tia8)
-                        window_tia8_max = max(windowed_tia8)
-                        if window_tia8_min != window_tia8_max:
-                            y_min, y_max = calculate_axis_limits(window_tia8_min, window_tia8_max, PPG_MARGIN_PERCENT)
-                            ax_tia_3.set_ylim(y_min, y_max)
-
-                    if windowed_tia10:
-                        window_tia10_min = min(windowed_tia10)
-                        window_tia10_max = max(windowed_tia10)
-                        if window_tia10_min != window_tia10_max:
-                            y_min, y_max = calculate_axis_limits(window_tia10_min, window_tia10_max, PPG_MARGIN_PERCENT)
-                            ax_tia_4.set_ylim(y_min, y_max)
-
+                    tia3_line.set_data(ppg_windowed_time, tia3_array[mask])
+                    tia5_line.set_data(ppg_windowed_time, tia5_array[mask])
+                    tia8_line.set_data(ppg_windowed_time, tia8_array[mask])
+                    tia10_line.set_data(ppg_windowed_time, tia10_array[mask])
+                    
+                    # Only update y-axis limits periodically to reduce overhead
+                    if frame % PPG_YLIM_UPDATE_INTERVAL == 0:
+                        # Get the min/max values for the windowed data
+                        if len(tia3_array[mask]) > 0:
+                            window_tia3_min = np.min(tia3_array[mask])
+                            window_tia3_max = np.max(tia3_array[mask])
+                            if window_tia3_min != window_tia3_max:  # Avoid flat lines causing issues
+                                y_min, y_max = calculate_axis_limits(window_tia3_min, window_tia3_max, PPG_MARGIN_PERCENT)
+                                ax_tia_1.set_ylim(y_min, y_max)
+                        
+                        if len(tia5_array[mask]) > 0:
+                            window_tia5_min = np.min(tia5_array[mask])
+                            window_tia5_max = np.max(tia5_array[mask])
+                            if window_tia5_min != window_tia5_max:
+                                y_min, y_max = calculate_axis_limits(window_tia5_min, window_tia5_max, PPG_MARGIN_PERCENT)
+                                ax_tia_2.set_ylim(y_min, y_max)
+                        
+                        if len(tia8_array[mask]) > 0:
+                            window_tia8_min = np.min(tia8_array[mask])
+                            window_tia8_max = np.max(tia8_array[mask])
+                            if window_tia8_min != window_tia8_max:
+                                y_min, y_max = calculate_axis_limits(window_tia8_min, window_tia8_max, PPG_MARGIN_PERCENT)
+                                ax_tia_3.set_ylim(y_min, y_max)
+                        
+                        if len(tia10_array[mask]) > 0:
+                            window_tia10_min = np.min(tia10_array[mask])
+                            window_tia10_max = np.max(tia10_array[mask])
+                            if window_tia10_min != window_tia10_max:
+                                y_min, y_max = calculate_axis_limits(window_tia10_min, window_tia10_max, PPG_MARGIN_PERCENT)
+                                ax_tia_4.set_ylim(y_min, y_max)
+                                
         except Exception as e:
-            print(f"Error updating PPG plot: {e}")
+            # Only print occasional errors to reduce console spam
+            if frame % 100 == 0:
+                print(f"Error updating PPG plot: {e}")
 
-    # Always ensure x-axis limits are correct
-    ax_acc.set_xlim(0, DISPLAY_WINDOW)
-    ax_gyr.set_xlim(0, DISPLAY_WINDOW)
-    ax_tia_1.set_xlim(0, DISPLAY_WINDOW)
-    ax_tia_2.set_xlim(0, DISPLAY_WINDOW)
-    ax_tia_3.set_xlim(0, DISPLAY_WINDOW)
-    ax_tia_4.set_xlim(0, DISPLAY_WINDOW)
+    # No need to update these every frame since they're fixed
+    if frame % 30 == 0:
+        # Always ensure x-axis limits are correct
+        ax_acc.set_xlim(0, DISPLAY_WINDOW)
+        ax_gyr.set_xlim(0, DISPLAY_WINDOW)
+        ax_tia_1.set_xlim(0, DISPLAY_WINDOW)
+        ax_tia_2.set_xlim(0, DISPLAY_WINDOW)
+        ax_tia_3.set_xlim(0, DISPLAY_WINDOW)
+        ax_tia_4.set_xlim(0, DISPLAY_WINDOW)
 
     return (acc_x_line, acc_y_line, acc_z_line,
             gyr_x_line, gyr_y_line, gyr_z_line,
@@ -443,7 +452,7 @@ def update(frame):
 
 
 def read_imu_pipe_data():
-    """Read data from the IMU named pipe"""
+    """Read data from the IMU named pipe - optimized with error handling"""
     global imu_timestamps, acc_x_data, acc_y_data, acc_z_data, gyr_x_data, gyr_y_data, gyr_z_data, imu_last_update
     
     try:
@@ -470,43 +479,65 @@ def read_imu_pipe_data():
                                         gyr_y_data.append(float(values[5]))
                                         gyr_z_data.append(float(values[6]))
                                         imu_last_update = time.time()
+                            else:
+                                # Small sleep to avoid CPU spinning when no data
+                                time.sleep(0.001)
                         except Exception as e:
-                            print(f"Error reading IMU line: {e}")
-                            break
+                            if running:
+                                print(f"Error reading IMU line: {e}")
+                                break
                             
                     pipe.close()
                     
                 except Exception as e:
-                    print(f"Error opening BMI323 pipe: {e}")
-                    time.sleep(1)  # Wait before trying to reconnect
+                    if running:
+                        print(f"Error opening BMI323 pipe: {e}")
+                        time.sleep(1)  # Wait before trying to reconnect
         else:
-            # Unix named pipe handling (original code)
-            with open(BMI323_PIPE_PATH, 'r') as pipe:
-                while running:
-                    try:
-                        line = pipe.readline().strip()
-                        if line:
-                            values = [float(x) for x in line.split()]
-                            if len(values) == 6:
-                                with imu_lock:
-                                    current_time = time.time()
-                                    imu_timestamps.append(current_time)
-                                    acc_x_data.append(values[0])
-                                    acc_y_data.append(values[1])
-                                    acc_z_data.append(values[2])
-                                    gyr_x_data.append(values[3])
-                                    gyr_y_data.append(values[4])
-                                    gyr_z_data.append(values[5])
-                                    imu_last_update = current_time
-                    except Exception as e:
-                        print(f"Error reading IMU data: {e}")
-                        time.sleep(0.1)
+            # Unix named pipe handling
+            while running:
+                try:
+                    # Create pipe if it doesn't exist
+                    if not os.path.exists(BMI323_PIPE_PATH):
+                        os.mkfifo(BMI323_PIPE_PATH)
+                    
+                    with open(BMI323_PIPE_PATH, 'r') as pipe:
+                        print(f"Connected to BMI323 pipe: {BMI323_PIPE_PATH}")
+                        
+                        while running:
+                            try:
+                                line = pipe.readline().strip()
+                                if line:
+                                    values = [float(x) for x in line.split()]
+                                    if len(values) == 6:
+                                        with imu_lock:
+                                            current_time = time.time()
+                                            imu_timestamps.append(current_time)
+                                            acc_x_data.append(values[0])
+                                            acc_y_data.append(values[1])
+                                            acc_z_data.append(values[2])
+                                            gyr_x_data.append(values[3])
+                                            gyr_y_data.append(values[4])
+                                            gyr_z_data.append(values[5])
+                                            imu_last_update = current_time
+                                else:
+                                    # Small sleep to avoid CPU spinning when no data
+                                    time.sleep(0.001)
+                            except Exception as e:
+                                if running:
+                                    print(f"Error reading IMU data: {e}")
+                                    time.sleep(0.1)
+                except Exception as e:
+                    if running:
+                        print(f"Error opening IMU pipe: {e}")
+                        time.sleep(1)  # Wait before trying to reconnect
     except Exception as e:
-        print(f"Error opening IMU pipe: {e}")
+        if running:
+            print(f"Error in IMU pipe thread: {e}")
 
 
 def read_ppg_pipe_data():
-    """Read data from the PPG named pipe"""
+    """Read data from the PPG named pipe - optimized with error handling"""
     global ppg_timestamps, tia1_3_data, tia1_5_data, tia1_8_data, tia1_10_data, ppg_last_update
     
     try:
@@ -531,37 +562,59 @@ def read_ppg_pipe_data():
                                         tia1_8_data.append(float(values[3]))
                                         tia1_10_data.append(float(values[4]))
                                         ppg_last_update = time.time()
+                            else:
+                                # Small sleep to avoid CPU spinning when no data
+                                time.sleep(0.001)
                         except Exception as e:
-                            print(f"Error reading PPG line: {e}")
-                            break
+                            if running:
+                                print(f"Error reading PPG line: {e}")
+                                break
                             
                     pipe.close()
                     
                 except Exception as e:
-                    print(f"Error opening AFE4950 pipe: {e}")
-                    time.sleep(1)  # Wait before trying to reconnect
+                    if running:
+                        print(f"Error opening AFE4950 pipe: {e}")
+                        time.sleep(1)  # Wait before trying to reconnect
         else:
-            # Unix named pipe handling (original code)
-            with open(AFE4950_PIPE_PATH, 'r') as pipe:
-                while running:
-                    try:
-                        line = pipe.readline().strip()
-                        if line:
-                            values = [float(x) for x in line.split()]
-                            if len(values) == 4:
-                                with ppg_lock:
-                                    current_time = time.time()
-                                    ppg_timestamps.append(current_time)
-                                    tia1_3_data.append(values[0])
-                                    tia1_5_data.append(values[1])
-                                    tia1_8_data.append(values[2])
-                                    tia1_10_data.append(values[3])
-                                    ppg_last_update = current_time
-                    except Exception as e:
-                        print(f"Error reading PPG data: {e}")
-                        time.sleep(0.1)
+            # Unix named pipe handling
+            while running:
+                try:
+                    # Create pipe if it doesn't exist
+                    if not os.path.exists(AFE4950_PIPE_PATH):
+                        os.mkfifo(AFE4950_PIPE_PATH)
+                    
+                    with open(AFE4950_PIPE_PATH, 'r') as pipe:
+                        print(f"Connected to AFE4950 pipe: {AFE4950_PIPE_PATH}")
+                        
+                        while running:
+                            try:
+                                line = pipe.readline().strip()
+                                if line:
+                                    values = [float(x) for x in line.split()]
+                                    if len(values) == 4:
+                                        with ppg_lock:
+                                            current_time = time.time()
+                                            ppg_timestamps.append(current_time)
+                                            tia1_3_data.append(values[0])
+                                            tia1_5_data.append(values[1])
+                                            tia1_8_data.append(values[2])
+                                            tia1_10_data.append(values[3])
+                                            ppg_last_update = current_time
+                                else:
+                                    # Small sleep to avoid CPU spinning when no data
+                                    time.sleep(0.001)
+                            except Exception as e:
+                                if running:
+                                    print(f"Error reading PPG data: {e}")
+                                    time.sleep(0.1)
+                except Exception as e:
+                    if running:
+                        print(f"Error opening PPG pipe: {e}")
+                        time.sleep(1)  # Wait before trying to reconnect
     except Exception as e:
-        print(f"Error opening PPG pipe: {e}")
+        if running:
+            print(f"Error in PPG pipe thread: {e}")
 
 
 if __name__ == "__main__":
@@ -574,8 +627,8 @@ if __name__ == "__main__":
     ppg_thread.daemon = True
     ppg_thread.start()
 
-    # Start the animation
-    ani = FuncAnimation(fig, update, init_func=init, interval=UPDATE_INTERVAL, blit=False)
+    # Start the animation with optimized settings
+    ani = FuncAnimation(fig, update, init_func=init, interval=UPDATE_INTERVAL, blit=True)
 
     print("Starting visualization... (Press Ctrl+C to exit)")
     try:
